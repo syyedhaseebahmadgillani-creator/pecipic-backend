@@ -1,43 +1,50 @@
+// server.js — Pecipic.ai Backend (Layout Preserving Version)
 import express from "express";
 import multer from "multer";
 import cors from "cors";
+import { exec } from "child_process";
 import fs from "fs";
-import { spawn } from "child_process";
 import path from "path";
-import { fileURLToPath } from "url";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 const app = express();
+const upload = multer({ dest: "uploads/" });
+
 app.use(cors());
 app.use(express.json());
 
-const upload = multer({ dest: "uploads/" });
+const PORT = process.env.PORT || 10000;
 
-// === New endpoint for AI-enhanced image-to-docx conversion ===
+// === Route to check API status ===
+app.get("/", (req, res) => {
+  res.send("✅ Pecipic Backend is Running.");
+});
+
+// === Convert endpoint ===
 app.post("/convert-ai", upload.single("image"), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+  const inputPath = req.file.path;
+  const outputPath = inputPath + ".docx";
+
   try {
-    const inputPath = req.file.path;
-    const outputPath = `${__dirname}/output/${Date.now()}_converted.docx`;
-
-    // Run Python helper script
-    const python = spawn("python3", ["converter_ai.py", inputPath, outputPath]);
-
-    python.on("close", (code) => {
-      if (code === 0) {
-        res.download(outputPath, "Pecipic_Converted.docx", (err) => {
-          fs.unlinkSync(inputPath);
-          fs.unlinkSync(outputPath);
-        });
-      } else {
-        res.status(500).send("Conversion failed");
+    // Run a Python script for OCR + layout
+    const command = `python3 convert_layout.py "${inputPath}" "${outputPath}"`;
+    exec(command, (error) => {
+      fs.unlink(inputPath, () => {});
+      if (error) {
+        console.error("Python error:", error);
+        return res.status(500).json({ error: "Conversion failed" });
       }
+
+      // Send back the Word file
+      res.download(outputPath, "Pecipic-Converted.docx", () => {
+        fs.unlink(outputPath, () => {});
+      });
     });
   } catch (err) {
-    console.error(err);
-    res.status(500).send("Server error");
+    console.error("Server error:", err);
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`✅ Pecipic backend running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Pecipic backend running on port ${PORT}`));
