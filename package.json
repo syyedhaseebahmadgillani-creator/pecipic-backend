@@ -1,7 +1,7 @@
 {
   "name": "pecipic-backend",
   "version": "1.0.0",
-  "description": "Pecipic.ai backend: image -> docx (Tesseract.js + docx)",
+  "description": "Pecipic.ai backend - image -> docx (Tesseract + docx)",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
