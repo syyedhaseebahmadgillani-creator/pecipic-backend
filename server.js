@@ -1,71 +1,78 @@
-// server.js - Pecipic backend (Node) that calls Python layout script
 import express from "express";
-import cors from "cors";
 import multer from "multer";
-import { execFile } from "child_process";
-import path from "path";
+import cors from "cors";
+import Tesseract from "tesseract.js";
+import { Document, Packer, Paragraph, TextRun, ImageRun, AlignmentType } from "docx";
+import sharp from "sharp";
 import fs from "fs";
+import path from "path";
 
 const app = express();
+const upload = multer({ dest: "uploads/" });
+const PORT = process.env.PORT || 3000;
+
 app.use(cors());
 app.use(express.json());
 
-// Multer store to uploads/ folder
-const upload = multer({ dest: "uploads/", limits: { fileSize: 12 * 1024 * 1024 } });
-
-app.get("/", (req, res) => res.send("Pecipic backend ready"));
-
-// Basic endpoint (kept as fallback)
-app.post("/convert", upload.single("image"), async (req, res) => {
-  res.status(400).send("Use /convert-ai for layout-preserving conversion");
+app.get("/", (req, res) => {
+  res.send("✅ Pecipic backend is live");
 });
 
-// AI layout route: runs Python script to create docx
-app.post("/convert-ai", upload.single("image"), (req, res) => {
+app.post("/convert-ai", upload.single("image"), async (req, res) => {
   try {
-    if (!req.file) return res.status(400).send("No file uploaded (form field 'image')");
+    const imagePath = req.file.path;
 
-    const imgPath = path.resolve(req.file.path);
-    const outName = `converted-${Date.now()}.docx`;
-    const outPath = path.resolve("outputs", outName);
+    // Compress + ensure correct format
+    const processedPath = `${imagePath}-processed.png`;
+    await sharp(imagePath).resize({ width: 1200, withoutEnlargement: true }).toFile(processedPath);
 
-    // Make outputs folder if doesn't exist
-    if (!fs.existsSync("outputs")) fs.mkdirSync("outputs");
-
-    const pyScript = path.resolve("python", "layout_ocr.py");
-    const args = [imgPath, outPath];
-
-    console.log("Running Python script:", pyScript, args.join(" "));
-
-    execFile("python3", [pyScript, ...args], { maxBuffer: 1024 * 1024 * 200 }, (err, stdout, stderr) => {
-      if (err) {
-        console.error("Python error:", err);
-        console.error("stderr:", stderr?.toString?.());
-        return res.status(500).send("AI conversion failed");
-      }
-
-      if (!fs.existsSync(outPath)) {
-        console.error("Output file missing. Python stdout:", stdout);
-        return res.status(500).send("AI conversion failed - no output file");
-      }
-
-      // Stream the docx to client
-      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
-      res.setHeader("Content-Disposition", `attachment; filename="${path.basename(outPath)}"`);
-
-      const filestream = fs.createReadStream(outPath);
-      filestream.pipe(res);
-
-      filestream.on("close", () => {
-        try { fs.unlinkSync(imgPath); } catch {}
-        try { fs.unlinkSync(outPath); } catch {}
-      });
+    const result = await Tesseract.recognize(processedPath, "eng", {
+      logger: (m) => console.log(m),
     });
-  } catch (e) {
-    console.error("Server /convert-ai error:", e);
-    res.status(500).send("Server error");
+
+    const extractedText = result.data.text || "No text detected";
+
+    const arrayBuffer = fs.readFileSync(processedPath);
+    const paragraphs = [];
+
+    // Add image first
+    paragraphs.push(
+      new Paragraph({
+        children: [
+          new ImageRun({
+            data: arrayBuffer,
+            transformation: { width: 500, height: 700 },
+          }),
+        ],
+        alignment: AlignmentType.CENTER,
+      })
+    );
+
+    // Add text below image
+    paragraphs.push(
+      new Paragraph({
+        children: [new TextRun("——— Extracted Text ———")],
+        alignment: AlignmentType.CENTER,
+      })
+    );
+
+    extractedText.split(/\r?\n/).forEach((line) => {
+      paragraphs.push(new Paragraph({ children: [new TextRun(line)] }));
+    });
+
+    const doc = new Document({ sections: [{ children: paragraphs }] });
+    const buffer = await Packer.toBuffer(doc);
+
+    fs.unlinkSync(imagePath);
+    fs.unlinkSync(processedPath);
+
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+    res.setHeader("Content-Disposition", "attachment; filename=Pecipic-Converted.docx");
+    res.send(buffer);
+  } catch (err) {
+    console.error("❌ Error:", err);
+    res.status(500).send("Conversion failed: " + err.message);
   }
 });
 
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`Pecipic backend listening on ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
