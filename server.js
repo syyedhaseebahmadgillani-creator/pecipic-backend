@@ -72,3 +72,48 @@ app.post("/convert", upload.single("image"), async (req, res) => {
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+
+import { execFile } from "child_process";
+import path from "path";
+
+app.post("/convert-ai", upload.single("image"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).send("No file uploaded");
+    const imgPath = req.file.path;
+
+    const pyScript = path.resolve("./python/layout_ocr.py");
+
+    execFile("python3", [pyScript, imgPath], { maxBuffer: 1024 * 1024 * 20 }, (err, stdout, stderr) => {
+      if (err) {
+        console.error(stderr);
+        return res.status(500).send("AI OCR failed");
+      }
+
+      const text = stdout.trim() || "No text found";
+
+      // Build DOCX with layout-aware text blocks
+      const { Document, Packer, Paragraph, TextRun } = require("docx");
+      const doc = new Document({
+        sections: [
+          {
+            children: text.split("\n\n").map(block =>
+              new Paragraph({
+                children: [new TextRun(block)],
+              })
+            ),
+          },
+        ],
+      });
+
+      Packer.toBuffer(doc).then(buffer => {
+        res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+        res.setHeader("Content-Disposition", "attachment; filename=AI-Layout.docx");
+        res.send(buffer);
+      });
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).send("AI layout conversion error");
+  }
+});
+                                
